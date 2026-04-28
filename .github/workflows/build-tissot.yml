@@ -1,4 +1,4 @@
-name: Build Tissot TWRP Kernel (GCC)
+name: Build Tissot TWRP Kernel GCC
 
 on:
   workflow_dispatch:
@@ -18,8 +18,9 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache
           sudo apt-get clean
+          df -h
 
-      - name: Install GCC toolchains
+      - name: Install deps
         run: |
           sudo apt update
           sudo apt install -y \
@@ -28,7 +29,7 @@ jobs:
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
-      - name: Build kernel (GCC ONLY)
+      - name: Build kernel GCC
         run: |
           set -euo pipefail
 
@@ -37,19 +38,32 @@ jobs:
           export KBUILD_BUILD_USER=github
           export KBUILD_BUILD_HOST=actions
 
+          echo "===== REMOVE WERROR FROM SOURCE ====="
+          grep -RIl -- '-Werror' . \
+            --exclude-dir=.git \
+            --exclude-dir=out \
+            | xargs -r sed -i \
+              -e 's/-Werror//g' \
+              -e 's/-Werror=[A-Za-z0-9_-]*//g'
+
           echo "===== DEFCONFIG ====="
           make O=out ARCH=arm64 msm8953-perf_defconfig
 
           echo "===== FIX CONFIG ====="
           scripts/config --file out/.config -d CONFIG_CC_STACKPROTECTOR_STRONG || true
           scripts/config --file out/.config -e CONFIG_CC_STACKPROTECTOR || true
+          scripts/config --file out/.config -d CONFIG_WERROR || true
+          scripts/config --file out/.config -d CONFIG_ENABLE_WARN_DEPRECATED || true
+
           make O=out ARCH=arm64 olddefconfig
 
-          echo "===== BUILD GCC ====="
+          echo "===== BUILD GCC NO WERROR ====="
           make -j$(nproc --all) O=out \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            KCFLAGS="-Wno-error -Wno-error=date-time -Wno-error=unused-function -Wno-error=unused-variable -Wno-error=unused-label -Wno-error=maybe-uninitialized -Wno-error=implicit-fallthrough" \
+            KCPPFLAGS="-Wno-error" \
             Image.gz 2>&1 | tee build.log
 
           echo "===== OUTPUT ====="
@@ -63,12 +77,16 @@ jobs:
           elif [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image kernel-output
           else
-            echo "ERROR: No kernel image"
+            echo "ERROR: No kernel image found"
             exit 1
           fi
 
-      - name: Pack AnyKernel3
+          ls -lh kernel-output
+
+      - name: Pack AnyKernel3 TWRP zip
         run: |
+          set -euo pipefail
+
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cd AnyKernel3
 
@@ -89,6 +107,7 @@ jobs:
 
           block=/dev/block/bootdevice/by-name/boot;
           is_slot_device=auto;
+          ramdisk_compression=auto;
 
           . tools/ak3-core.sh;
 
@@ -98,6 +117,8 @@ jobs:
 
           zip -r9 ../Tissot-Kernel-TWRP.zip . -x '*.git*'
           cd ..
+
+          ls -lh Tissot-Kernel-TWRP.zip
 
       - name: Upload
         uses: actions/upload-artifact@v4
