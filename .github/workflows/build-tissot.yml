@@ -1,0 +1,94 @@
+name: Build Tissot TWRP Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout kernel
+        uses: actions/checkout@v4
+        with:
+          ref: thirteen
+          fetch-depth: 1
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache
+          sudo apt-get clean
+          df -h
+
+      - name: Install packages
+        run: |
+          sudo apt update
+          sudo apt install -y git bc bison flex zip unzip curl make python3 libssl-dev \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Get clang
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+
+      - name: Build kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=github
+          export KBUILD_BUILD_HOST=actions
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+
+          make O=out ARCH=arm64 msm8953-perf_defconfig
+
+          make -j$(nproc --all) O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            Image.gz-dtb 2>&1 | tee build.log
+
+          ls -lh out/arch/arm64/boot/ || true
+
+      - name: Package AnyKernel3 TWRP zip
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          cd AnyKernel3
+          rm -rf .git README.md LICENSE
+
+          cp ../out/arch/arm64/boot/Image.gz-dtb ./Image.gz-dtb
+
+          cat > anykernel.sh <<'EOF'
+          # AnyKernel3 Ramdisk Mod Script
+          properties() { '
+          kernel.string=Tissot Kernel
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=tissot
+          device.name2=Mi A1
+          supported.versions=
+          supported.patchlevels=
+          '; }
+
+          block=/dev/block/bootdevice/by-name/boot;
+          is_slot_device=auto;
+          ramdisk_compression=auto;
+
+          . tools/ak3-core.sh;
+
+          split_boot;
+          flash_boot;
+          EOF
+
+          zip -r9 ../Tissot-Kernel-TWRP.zip . -x '*.git*' README.md LICENSE
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tissot-Kernel-TWRP
+          path: |
+            Tissot-Kernel-TWRP.zip
+            build.log
+            out/arch/arm64/boot/Image.gz-dtb
