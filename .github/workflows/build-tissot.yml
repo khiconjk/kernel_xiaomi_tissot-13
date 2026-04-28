@@ -5,34 +5,27 @@ on:
 
 jobs:
   build:
-    name: Build kernel and TWRP zip
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout kernel source
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: thirteen
           fetch-depth: 1
 
-      - name: Free disk space
+      - name: Free disk
         run: |
-          set -e
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache
           sudo apt-get clean
           df -h
 
-      - name: Install dependencies
+      - name: Install deps
         run: |
-          set -e
           sudo apt update
           sudo apt install -y \
             git bc bison flex zip unzip curl make python3 \
-            libssl-dev libelf-dev \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+            libssl-dev libelf-dev
 
       - name: Clone clang
         run: |
@@ -48,27 +41,26 @@ jobs:
           export KBUILD_BUILD_HOST=actions
           export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
 
-          echo "===== Defconfig ====="
+          echo "===== DEFCONFIG ====="
           make O=out ARCH=arm64 msm8953-perf_defconfig
 
           echo "===== FIX STACKPROTECTOR ====="
           scripts/config --file out/.config -d CONFIG_CC_STACKPROTECTOR_STRONG || true
           scripts/config --file out/.config -e CONFIG_CC_STACKPROTECTOR || true
-
           make O=out ARCH=arm64 olddefconfig
 
-          echo "===== Build ====="
-          make -j$(nproc --all) O=out ARCH=arm64 \
+          echo "===== BUILD (LLVM MODE) ====="
+          make -j$(nproc --all) O=out \
+            ARCH=arm64 \
             CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LLVM=1 \
+            LLVM_IAS=1 \
             Image.gz 2>&1 | tee build.log
 
-          echo "===== Output ====="
+          echo "===== OUTPUT ====="
           find out/arch/arm64/boot -type f -exec ls -lh {} \;
 
-          echo "===== Pick kernel ====="
+          echo "===== PICK KERNEL ====="
           if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
             cp out/arch/arm64/boot/Image.gz-dtb kernel-output
           elif [ -f out/arch/arm64/boot/Image.gz ]; then
@@ -82,7 +74,7 @@ jobs:
 
           ls -lh kernel-output
 
-      - name: Package AnyKernel3
+      - name: Pack AnyKernel3
         run: |
           set -e
 
@@ -115,8 +107,6 @@ jobs:
 
           zip -r9 ../Tissot-Kernel-TWRP.zip . -x '*.git*'
           cd ..
-
-          ls -lh Tissot-Kernel-TWRP.zip
 
       - name: Upload
         uses: actions/upload-artifact@v4
