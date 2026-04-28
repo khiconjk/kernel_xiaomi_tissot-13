@@ -39,12 +39,14 @@ jobs:
           export KBUILD_BUILD_HOST=actions
 
           echo "===== REMOVE WERROR FROM SOURCE ====="
-          grep -RIl -- '-Werror' . \
-            --exclude-dir=.git \
-            --exclude-dir=out \
-            | xargs -r sed -i \
-              -e 's/-Werror//g' \
-              -e 's/-Werror=[A-Za-z0-9_-]*//g'
+          find . \
+            -path './.git' -prune -o \
+            -path './out' -prune -o \
+            -type f \
+            \( -name 'Makefile' -o -name 'Kbuild' -o -name '*.mk' -o -name '*.c' -o -name '*.h' \) \
+            -print0 | xargs -0 sed -i \
+              -e 's/-Werror=[A-Za-z0-9_-]*//g' \
+              -e 's/-Werror//g'
 
           echo "===== DEFCONFIG ====="
           make O=out ARCH=arm64 msm8953-perf_defconfig
