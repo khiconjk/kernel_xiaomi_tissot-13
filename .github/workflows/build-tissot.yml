@@ -5,10 +5,11 @@ on:
 
 jobs:
   build:
+    name: Build kernel and TWRP flashable zip
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout kernel
+      - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
           ref: thirteen
@@ -16,49 +17,101 @@ jobs:
 
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache
+          set -e
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/hostedtoolcache
           sudo apt-get clean
           df -h
 
-      - name: Install packages
+      - name: Install build packages
         run: |
+          set -e
           sudo apt update
-          sudo apt install -y git bc bison flex zip unzip curl make python3 libssl-dev \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          sudo apt install -y \
+            git \
+            bc \
+            bison \
+            flex \
+            zip \
+            unzip \
+            curl \
+            make \
+            python3 \
+            libssl-dev \
+            libelf-dev \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi
 
-      - name: Get clang
+      - name: Clone clang toolchain
         run: |
+          set -e
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
 
       - name: Build kernel
         run: |
+          set -euo pipefail
+
           export ARCH=arm64
           export SUBARCH=arm64
           export KBUILD_BUILD_USER=github
           export KBUILD_BUILD_HOST=actions
           export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
 
+          echo "===== Toolchain check ====="
+          clang --version
+          aarch64-linux-gnu-gcc --version
+          arm-linux-gnueabi-gcc --version
+
+          echo "===== Defconfig ====="
           make O=out ARCH=arm64 msm8953-perf_defconfig
 
-          make -j$(nproc --all) O=out ARCH=arm64 \
+          echo "===== Build Image.gz ====="
+          make -j"$(nproc --all)" O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            Image.gz-dtb 2>&1 | tee build.log
+            Image.gz 2>&1 | tee build.log
 
-          ls -lh out/arch/arm64/boot/ || true
+          echo "===== Boot output files ====="
+          find out/arch/arm64/boot -maxdepth 4 -type f -print -exec ls -lh {} \;
 
-      - name: Package AnyKernel3 TWRP zip
+          echo "===== Pick kernel image ====="
+          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
+            cp out/arch/arm64/boot/Image.gz-dtb kernel-output
+            echo "Using Image.gz-dtb"
+          elif [ -f out/arch/arm64/boot/Image.gz ]; then
+            cp out/arch/arm64/boot/Image.gz kernel-output
+            echo "Using Image.gz"
+          elif [ -f out/arch/arm64/boot/Image ]; then
+            cp out/arch/arm64/boot/Image kernel-output
+            echo "Using Image"
+          else
+            echo "ERROR: No kernel image found"
+            exit 1
+          fi
+
+          ls -lh kernel-output
+
+      - name: Package TWRP flashable zip
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          cd AnyKernel3
-          rm -rf .git README.md LICENSE
+          set -euo pipefail
 
-          cp ../out/arch/arm64/boot/Image.gz-dtb ./Image.gz-dtb
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+
+          cd AnyKernel3
+
+          rm -rf .git
+          rm -f README.md
+          rm -f LICENSE
+
+          cp ../kernel-output ./Image.gz
 
           cat > anykernel.sh <<'EOF'
           # AnyKernel3 Ramdisk Mod Script
+
           properties() { '
           kernel.string=Tissot Kernel
           do.devicecheck=1
@@ -82,7 +135,12 @@ jobs:
           flash_boot;
           EOF
 
-          zip -r9 ../Tissot-Kernel-TWRP.zip . -x '*.git*' README.md LICENSE
+          zip -r9 ../Tissot-Kernel-TWRP.zip . -x '*.git*'
+
+          cd ..
+
+          echo "===== Final zip ====="
+          ls -lh Tissot-Kernel-TWRP.zip
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -90,5 +148,5 @@ jobs:
           name: Tissot-Kernel-TWRP
           path: |
             Tissot-Kernel-TWRP.zip
+            kernel-output
             build.log
-            out/arch/arm64/boot/Image.gz-dtb
