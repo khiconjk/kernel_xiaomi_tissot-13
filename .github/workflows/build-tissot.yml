@@ -1,4 +1,4 @@
-name: Build Tissot Kernel GCC 4.9 Android
+name: Build PE Tissot Kernel TWRP
 
 on:
   workflow_dispatch:
@@ -8,9 +8,10 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Checkout kernel
         uses: actions/checkout@v4
         with:
+          repository: PixelExperience-Devices/kernel_xiaomi_tissot
           ref: thirteen
           fetch-depth: 1
 
@@ -21,10 +22,13 @@ jobs:
             git bc bison flex zip unzip curl make python3 \
             libssl-dev libelf-dev gcc g++
 
-      - name: Clone Android GCC 4.9 toolchains
+      - name: Clone GCC 4.9 toolchains
         run: |
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32
+          git clone --depth=1 -b lineage-19.1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git gcc64
+
+          git clone --depth=1 -b lineage-19.1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git gcc32
 
       - name: Build kernel
         run: |
@@ -40,10 +44,12 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:/usr/bin:$PATH"
 
           echo "===== TOOLCHAIN CHECK ====="
+          ls -lh "$GITHUB_WORKSPACE/gcc64/bin" | head
+          ls -lh "$GITHUB_WORKSPACE/gcc32/bin" | head
           ${CROSS_COMPILE}gcc --version
           ${CROSS_COMPILE_ARM32}gcc --version
 
-          echo "===== REMOVE WERROR ====="
+          echo "===== CLEAN FLAGS ====="
           find . \
             -path './.git' -prune -o \
             -path './out' -prune -o \
@@ -64,51 +70,55 @@ jobs:
 
           make O=out ARCH=arm64 olddefconfig
 
-          echo "===== BUILD ====="
+          echo "===== BUILD IMAGE.GZ-DTB ====="
           make -j$(nproc --all) O=out \
             ARCH=arm64 \
             CROSS_COMPILE="$CROSS_COMPILE" \
             CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" \
             KCFLAGS="-Wno-error" \
-            Image.gz 2>&1 | tee build.log
+            Image.gz-dtb 2>&1 | tee build.log || \
+          make -j$(nproc --all) O=out \
+            ARCH=arm64 \
+            CROSS_COMPILE="$CROSS_COMPILE" \
+            CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" \
+            KCFLAGS="-Wno-error" \
+            Image.gz 2>&1 | tee -a build.log
 
           echo "===== OUTPUT ====="
           find out/arch/arm64/boot -type f -exec ls -lh {} \;
 
-          echo "===== PICK KERNEL ====="
           if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
             cp out/arch/arm64/boot/Image.gz-dtb kernel-output
+            echo "Using Image.gz-dtb"
           elif [ -f out/arch/arm64/boot/Image.gz ]; then
             cp out/arch/arm64/boot/Image.gz kernel-output
-          elif [ -f out/arch/arm64/boot/Image ]; then
-            cp out/arch/arm64/boot/Image kernel-output
+            echo "Using Image.gz"
           else
             echo "ERROR: No kernel image"
             exit 1
           fi
 
-          ls -lh kernel-output
-
-      - name: Pack AnyKernel3
+      - name: Pack TWRP flashable zip
         run: |
           set -euo pipefail
 
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cd AnyKernel3
-
           rm -rf .git README.md LICENSE
 
           cp ../kernel-output ./Image.gz
 
           cat > anykernel.sh <<'EOF'
           properties() { '
-          kernel.string=Tissot Kernel
+          kernel.string=PixelExperience Tissot Kernel
           do.devicecheck=1
           do.modules=0
           do.systemless=1
           do.cleanup=1
+          do.cleanuponabort=0
           device.name1=tissot
           device.name2=Mi A1
+          device.name3=Xiaomi Mi A1
           '; }
 
           block=/dev/block/bootdevice/by-name/boot;
@@ -121,14 +131,16 @@ jobs:
           flash_boot;
           EOF
 
-          zip -r9 ../Tissot-Kernel-TWRP.zip . -x '*.git*'
+          zip -r9 ../PE-Tissot-Kernel-TWRP.zip . -x '*.git*'
           cd ..
 
-      - name: Upload
+          ls -lh PE-Tissot-Kernel-TWRP.zip
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Tissot-Kernel
+          name: PE-Tissot-Kernel
           path: |
-            Tissot-Kernel-TWRP.zip
+            PE-Tissot-Kernel-TWRP.zip
             kernel-output
             build.log
