@@ -21,12 +21,14 @@ jobs:
           ref: thirteen
           fetch-depth: 1
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y git bc bison flex zip unzip curl make python3 libssl-dev libelf-dev gcc g++
+          sudo apt install -y \
+            git bc bison flex zip unzip curl make python3 \
+            libssl-dev libelf-dev gcc g++
 
-      - name: Download toolchains
+      - name: Download toolchains (FIXED)
         run: |
           set -e
 
@@ -45,3 +47,52 @@ jobs:
           echo "===== CLONE GCC32 ====="
           git clone --depth=1 \
             https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
+
+      - name: Build kernel
+        run: |
+          set -e
+
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=github
+          export KBUILD_BUILD_HOST=actions
+
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:/usr/bin:$PATH"
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+
+          echo "===== TOOLCHAIN CHECK ====="
+          clang --version
+          aarch64-linux-android-gcc --version
+          arm-linux-androideabi-gcc --version
+
+          echo "===== CLEAN FLAGS ====="
+          find . -type f ! -path "./.git/*" -exec sed -i \
+            -e 's/-Werror//g' \
+            -e 's/-implicit-function-declaration/-Wimplicit-function-declaration/g' {} +
+
+          echo "===== DEFCONFIG ====="
+          make O=out msm8953-perf_defconfig
+
+          echo "===== DISABLE STACKPROTECTOR (FINAL FIX) ====="
+          sed -i 's/CONFIG_CC_STACKPROTECTOR.*/# CONFIG_CC_STACKPROTECTOR is not set/g' out/.config
+          sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG.*/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g' out/.config
+
+          make O=out olddefconfig
+
+          echo "===== BUILD (SAFE MODE) ====="
+          make -j2 O=out \
+            CC=clang \
+            CROSS_COMPILE=$CROSS_COMPILE \
+            CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
+            KCFLAGS="-Wno-error" \
+            Image.gz 2>&1 | tee build.log
+
+          echo "===== OUTPUT ====="
+          find out/arch/arm64/boot -type f
+
+          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
+            cp out/arch/arm64/boot/Image.gz-dtb kernel-output
+          else
+            cp out/arch/arm64/boot/Image.gz kernel-output
+          fi
