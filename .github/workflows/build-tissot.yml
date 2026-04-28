@@ -44,7 +44,8 @@ jobs:
           export KBUILD_BUILD_USER=github
           export KBUILD_BUILD_HOST=actions
 
-          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          # QUAN TRỌNG: không cho clang override host toolchain
+          export PATH="/usr/bin:$GITHUB_WORKSPACE/clang/bin:$PATH"
 
           echo "===== DEFCONFIG ====="
           make O=out ARCH=arm64 msm8953-perf_defconfig
@@ -54,11 +55,12 @@ jobs:
           scripts/config --file out/.config -e CONFIG_CC_STACKPROTECTOR || true
           make O=out ARCH=arm64 olddefconfig
 
-          echo "===== BUILD ====="
+          echo "===== BUILD FINAL ====="
           make -j$(nproc --all) O=out \
             ARCH=arm64 \
             CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=0 \
+            LLVM_IAS=0 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             HOSTCC=gcc \
@@ -81,8 +83,6 @@ jobs:
             echo "ERROR: No kernel image"
             exit 1
           fi
-
-          ls -lh kernel-output
 
       - name: Pack AnyKernel3
         run: |
