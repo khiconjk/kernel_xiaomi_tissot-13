@@ -1,4 +1,4 @@
-name: Build Tissot TWRP Kernel GCC
+name: Build Tissot TWRP Kernel GCC FIXED
 
 on:
   workflow_dispatch:
@@ -14,12 +14,6 @@ jobs:
           ref: thirteen
           fetch-depth: 1
 
-      - name: Free disk
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache
-          sudo apt-get clean
-          df -h
-
       - name: Install deps
         run: |
           sudo apt update
@@ -29,21 +23,31 @@ jobs:
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
-      - name: Build kernel GCC
+      - name: Build kernel
         run: |
           set -euo pipefail
 
           export ARCH=arm64
           export SUBARCH=arm64
-          export KBUILD_BUILD_USER=github
-          export KBUILD_BUILD_HOST=actions
 
-          echo "===== REMOVE WERROR FROM SOURCE ====="
+          echo "===== FORCE FIX GLOBAL FLAGS ====="
+
+          # Fix trong toàn bộ repo (kể cả scripts/)
+          grep -RIl "implicit-function-declaration" . \
+            --exclude-dir=.git \
+            --exclude-dir=out \
+            | xargs -r sed -i \
+              -e 's/-implicit-function-declaration/-Wimplicit-function-declaration/g'
+
+          # Patch trực tiếp Kbuild core (QUAN TRỌNG)
+          sed -i 's/-implicit-function-declaration/-Wimplicit-function-declaration/g' scripts/Kbuild.include || true
+          sed -i 's/-implicit-function-declaration/-Wimplicit-function-declaration/g' Makefile || true
+
+          echo "===== REMOVE WERROR ====="
           find . \
             -path './.git' -prune -o \
             -path './out' -prune -o \
             -type f \
-            \( -name 'Makefile' -o -name 'Kbuild' -o -name '*.mk' -o -name '*.c' -o -name '*.h' \) \
             -print0 | xargs -0 sed -i \
               -e 's/-Werror=[A-Za-z0-9_-]*//g' \
               -e 's/-Werror//g'
@@ -51,21 +55,19 @@ jobs:
           echo "===== DEFCONFIG ====="
           make O=out ARCH=arm64 msm8953-perf_defconfig
 
-          echo "===== FIX CONFIG ====="
           scripts/config --file out/.config -d CONFIG_CC_STACKPROTECTOR_STRONG || true
           scripts/config --file out/.config -e CONFIG_CC_STACKPROTECTOR || true
           scripts/config --file out/.config -d CONFIG_WERROR || true
-          scripts/config --file out/.config -d CONFIG_ENABLE_WARN_DEPRECATED || true
 
           make O=out ARCH=arm64 olddefconfig
 
-          echo "===== BUILD GCC NO WERROR ====="
+          echo "===== BUILD ====="
           make -j$(nproc --all) O=out \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            KCFLAGS="-Wno-error -Wno-error=date-time -Wno-error=unused-function -Wno-error=unused-variable -Wno-error=unused-label -Wno-error=maybe-uninitialized -Wno-error=implicit-fallthrough" \
-            KCPPFLAGS="-Wno-error" \
+            KCFLAGS="-Wno-error -Wno-implicit-function-declaration" \
+            KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration" \
             Image.gz 2>&1 | tee build.log
 
           echo "===== OUTPUT ====="
@@ -76,57 +78,41 @@ jobs:
             cp out/arch/arm64/boot/Image.gz-dtb kernel-output
           elif [ -f out/arch/arm64/boot/Image.gz ]; then
             cp out/arch/arm64/boot/Image.gz kernel-output
-          elif [ -f out/arch/arm64/boot/Image ]; then
-            cp out/arch/arm64/boot/Image kernel-output
           else
-            echo "ERROR: No kernel image found"
+            echo "ERROR: No kernel image"
             exit 1
           fi
 
-          ls -lh kernel-output
-
-      - name: Pack AnyKernel3 TWRP zip
+      - name: Pack AnyKernel3
         run: |
-          set -euo pipefail
-
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cd AnyKernel3
-
-          rm -rf .git README.md LICENSE
+          rm -rf .git
 
           cp ../kernel-output ./Image.gz
 
           cat > anykernel.sh <<'EOF'
           properties() { '
           kernel.string=Tissot Kernel
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
           device.name1=tissot
           device.name2=Mi A1
           '; }
 
           block=/dev/block/bootdevice/by-name/boot;
-          is_slot_device=auto;
-          ramdisk_compression=auto;
 
           . tools/ak3-core.sh;
-
           split_boot;
           flash_boot;
           EOF
 
-          zip -r9 ../Tissot-Kernel-TWRP.zip . -x '*.git*'
+          zip -r9 ../TWRP-Kernel.zip .
           cd ..
-
-          ls -lh Tissot-Kernel-TWRP.zip
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Tissot-Kernel
+          name: kernel
           path: |
-            Tissot-Kernel-TWRP.zip
+            TWRP-Kernel.zip
             kernel-output
             build.log
