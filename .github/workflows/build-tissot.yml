@@ -1,4 +1,4 @@
-name: Build Tissot TWRP Kernel
+name: Build Tissot TWRP Kernel (GCC)
 
 on:
   workflow_dispatch:
@@ -19,23 +19,16 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache
           sudo apt-get clean
 
-      - name: Install deps
+      - name: Install GCC toolchains
         run: |
           sudo apt update
           sudo apt install -y \
             git bc bison flex zip unzip curl make python3 \
             libssl-dev libelf-dev \
             gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabi \
-            binutils-aarch64-linux-gnu \
-            binutils-arm-linux-gnueabi \
-            gcc g++
+            gcc-arm-linux-gnueabi
 
-      - name: Clone clang
-        run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
-
-      - name: Build kernel
+      - name: Build kernel (GCC ONLY)
         run: |
           set -euo pipefail
 
@@ -43,9 +36,6 @@ jobs:
           export SUBARCH=arm64
           export KBUILD_BUILD_USER=github
           export KBUILD_BUILD_HOST=actions
-
-          # QUAN TRỌNG: không cho clang override host toolchain
-          export PATH="/usr/bin:$GITHUB_WORKSPACE/clang/bin:$PATH"
 
           echo "===== DEFCONFIG ====="
           make O=out ARCH=arm64 msm8953-perf_defconfig
@@ -55,18 +45,11 @@ jobs:
           scripts/config --file out/.config -e CONFIG_CC_STACKPROTECTOR || true
           make O=out ARCH=arm64 olddefconfig
 
-          echo "===== BUILD FINAL ====="
+          echo "===== BUILD GCC ====="
           make -j$(nproc --all) O=out \
             ARCH=arm64 \
-            CC=clang \
-            LLVM=0 \
-            LLVM_IAS=0 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            HOSTCC=gcc \
-            HOSTCXX=g++ \
-            HOSTAR=ar \
-            HOSTLD=ld \
             Image.gz 2>&1 | tee build.log
 
           echo "===== OUTPUT ====="
