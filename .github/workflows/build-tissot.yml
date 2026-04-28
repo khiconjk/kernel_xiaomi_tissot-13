@@ -25,7 +25,9 @@ jobs:
           sudo apt update
           sudo apt install -y \
             git bc bison flex zip unzip curl make python3 \
-            libssl-dev libelf-dev
+            libssl-dev libelf-dev \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi
 
       - name: Clone clang
         run: |
@@ -49,12 +51,13 @@ jobs:
           scripts/config --file out/.config -e CONFIG_CC_STACKPROTECTOR || true
           make O=out ARCH=arm64 olddefconfig
 
-          echo "===== BUILD (LLVM MODE) ====="
+          echo "===== BUILD (CLANG + GCC HYBRID) ====="
           make -j$(nproc --all) O=out \
             ARCH=arm64 \
             CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             Image.gz 2>&1 | tee build.log
 
           echo "===== OUTPUT ====="
