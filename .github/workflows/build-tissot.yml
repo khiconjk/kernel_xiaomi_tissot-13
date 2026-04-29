@@ -36,6 +36,9 @@ jobs:
 
           export ARCH=arm64
           export SUBARCH=arm64
+          export KBUILD_BUILD_USER=github
+          export KBUILD_BUILD_HOST=actions
+
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
@@ -56,14 +59,24 @@ jobs:
           scripts/config --file out/.config -d CONFIG_MSM_CAMERA_V2 || true
           scripts/config --file out/.config -d CONFIG_MSMB_CAMERA || true
 
+          echo "===== DISABLE AUDIO DSP DEPENDENCY ====="
+          scripts/config --file out/.config -d CONFIG_MSM_AVTIMER || true
+          scripts/config --file out/.config -d CONFIG_SND_SOC_MSM_QDSP6 || true
+          scripts/config --file out/.config -d CONFIG_MSM_ADSP_LOADER || true
+
           make O=out ARCH=arm64 olddefconfig
 
           echo "===== FORCE CONFIG AFTER OLDDEFCONFIG ====="
           sed -i 's/CONFIG_CC_STACKPROTECTOR=y/# CONFIG_CC_STACKPROTECTOR is not set/g' out/.config || true
           sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g' out/.config || true
+
           sed -i 's/CONFIG_MSM_ISP=y/# CONFIG_MSM_ISP is not set/g' out/.config || true
           sed -i 's/CONFIG_MSM_CAMERA_V2=y/# CONFIG_MSM_CAMERA_V2 is not set/g' out/.config || true
           sed -i 's/CONFIG_MSMB_CAMERA=y/# CONFIG_MSMB_CAMERA is not set/g' out/.config || true
+
+          sed -i 's/CONFIG_MSM_AVTIMER=y/# CONFIG_MSM_AVTIMER is not set/g' out/.config || true
+          sed -i 's/CONFIG_SND_SOC_MSM_QDSP6=y/# CONFIG_SND_SOC_MSM_QDSP6 is not set/g' out/.config || true
+          sed -i 's/CONFIG_MSM_ADSP_LOADER=y/# CONFIG_MSM_ADSP_LOADER is not set/g' out/.config || true
 
           echo "===== BUILD ====="
           make -j2 O=out \
@@ -125,6 +138,8 @@ jobs:
 
           zip -r9 ../PE-Tissot-Kernel-TWRP.zip . -x '*.git*'
           cd ..
+
+          ls -lh PE-Tissot-Kernel-TWRP.zip
 
       - name: Upload
         if: always()
