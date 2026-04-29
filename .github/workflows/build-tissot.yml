@@ -80,6 +80,18 @@ jobs:
 
           cp out/arch/arm64/boot/Image.gz kernel-output
 
+
+
+      - name: Show real errors
+        if: always()
+        run: |
+          echo "===== ERROR LINES ====="
+          grep -i -n "error:\|fatal error:\|undefined reference\|No such file\|ld.lld:\|FAILED" build.log | head -100 || true
+          echo "===== LAST 200 LINES ====="
+          tail -200 build.log || true
+
+
+
       - name: Pack AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
