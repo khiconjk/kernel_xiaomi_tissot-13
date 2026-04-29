@@ -1,4 +1,4 @@
-name: Build PE Tissot Kernel TWRP (FINAL SUCCESS)
+name: Build PE Tissot Kernel TWRP
 
 on:
   workflow_dispatch:
@@ -36,6 +36,9 @@ jobs:
 
           export ARCH=arm64
           export SUBARCH=arm64
+          export KBUILD_BUILD_USER=github
+          export KBUILD_BUILD_HOST=actions
+
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
@@ -47,27 +50,51 @@ jobs:
           scripts/config --file out/.config -d CONFIG_CC_STACKPROTECTOR || true
           scripts/config --file out/.config -d CONFIG_WERROR || true
 
-          echo "===== DISABLE CAMERA ====="
+          echo "===== DISABLE BROKEN CAMERA DRIVER ====="
           scripts/config --file out/.config -d CONFIG_MSM_ISP || true
           scripts/config --file out/.config -d CONFIG_MSM_CAMERA_V2 || true
           scripts/config --file out/.config -d CONFIG_MSMB_CAMERA || true
 
-          echo "===== DISABLE ALL AUDIO DSP ====="
-          scripts/config --file out/.config -d CONFIG_SND_SOC || true
+          echo "===== DISABLE AUDIO ====="
           scripts/config --file out/.config -d CONFIG_SND || true
+          scripts/config --file out/.config -d CONFIG_SND_SOC || true
           scripts/config --file out/.config -d CONFIG_AUDIO || true
           scripts/config --file out/.config -d CONFIG_MSM_AVTIMER || true
           scripts/config --file out/.config -d CONFIG_SND_SOC_MSM_QDSP6 || true
           scripts/config --file out/.config -d CONFIG_MSM_ADSP_LOADER || true
 
+          echo "===== DISABLE BLUETOOTH AUDIO DEP ====="
+          scripts/config --file out/.config -d CONFIG_BT || true
+          scripts/config --file out/.config -d CONFIG_BT_SLIM || true
+          scripts/config --file out/.config -d CONFIG_BT_BTFM_SLIM || true
+          scripts/config --file out/.config -d CONFIG_BTFM_SLIM || true
+
           make O=out ARCH=arm64 olddefconfig
 
-          echo "===== FORCE CONFIG ====="
-          sed -i 's/CONFIG_CC_STACKPROTECTOR=y/# CONFIG_CC_STACKPROTECTOR is not set/g' out/.config
-          sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g' out/.config
+          echo "===== FORCE CONFIG AFTER OLDDEFCONFIG ====="
+          sed -i 's/CONFIG_CC_STACKPROTECTOR=y/# CONFIG_CC_STACKPROTECTOR is not set/g' out/.config || true
+          sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g' out/.config || true
 
-          echo "===== REMOVE TECHPACK AUDIO SOURCE (CRITICAL FIX) ====="
+          sed -i 's/CONFIG_MSM_ISP=y/# CONFIG_MSM_ISP is not set/g' out/.config || true
+          sed -i 's/CONFIG_MSM_CAMERA_V2=y/# CONFIG_MSM_CAMERA_V2 is not set/g' out/.config || true
+          sed -i 's/CONFIG_MSMB_CAMERA=y/# CONFIG_MSMB_CAMERA is not set/g' out/.config || true
+
+          sed -i 's/CONFIG_SND=y/# CONFIG_SND is not set/g' out/.config || true
+          sed -i 's/CONFIG_SND_SOC=y/# CONFIG_SND_SOC is not set/g' out/.config || true
+          sed -i 's/CONFIG_AUDIO=y/# CONFIG_AUDIO is not set/g' out/.config || true
+          sed -i 's/CONFIG_MSM_AVTIMER=y/# CONFIG_MSM_AVTIMER is not set/g' out/.config || true
+          sed -i 's/CONFIG_SND_SOC_MSM_QDSP6=y/# CONFIG_SND_SOC_MSM_QDSP6 is not set/g' out/.config || true
+          sed -i 's/CONFIG_MSM_ADSP_LOADER=y/# CONFIG_MSM_ADSP_LOADER is not set/g' out/.config || true
+
+          sed -i 's/CONFIG_BT=y/# CONFIG_BT is not set/g' out/.config || true
+          sed -i 's/CONFIG_BT_SLIM=y/# CONFIG_BT_SLIM is not set/g' out/.config || true
+          sed -i 's/CONFIG_BT_BTFM_SLIM=y/# CONFIG_BT_BTFM_SLIM is not set/g' out/.config || true
+          sed -i 's/CONFIG_BTFM_SLIM=y/# CONFIG_BTFM_SLIM is not set/g' out/.config || true
+
+          echo "===== REMOVE PROBLEM SOURCE ====="
           rm -rf techpack/audio || true
+          rm -f drivers/bluetooth/btfm_slim.o || true
+          rm -f drivers/bluetooth/btfm_slim_codec.o || true
 
           echo "===== BUILD ====="
           make -j2 O=out \
@@ -80,17 +107,26 @@ jobs:
           echo "===== OUTPUT ====="
           find out/arch/arm64/boot -type f -exec ls -lh {} \;
 
-          cp out/arch/arm64/boot/Image.gz kernel-output
+          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
+            cp out/arch/arm64/boot/Image.gz-dtb kernel-output
+          elif [ -f out/arch/arm64/boot/Image.gz ]; then
+            cp out/arch/arm64/boot/Image.gz kernel-output
+          else
+            echo "ERROR: No kernel image found"
+            exit 1
+          fi
+
+          ls -lh kernel-output
 
       - name: Show real errors
         if: always()
         run: |
           echo "===== ERROR LINES ====="
-          grep -i -n "error:\|fatal error:\|undefined reference\|No such file\|FAILED" build.log | head -100 || true
+          grep -i -n "error:\|fatal error:\|undefined reference\|No such file\|ld.lld:\|FAILED" build.log | head -100 || true
           echo "===== LAST 200 LINES ====="
           tail -200 build.log || true
 
-      - name: Pack AnyKernel3
+      - name: Pack AnyKernel3 TWRP zip
         if: success()
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
@@ -99,15 +135,38 @@ jobs:
 
           cp ../kernel-output ./Image.gz
 
-          zip -r9 ../kernel.zip .
+          cat > anykernel.sh <<'EOF'
+          properties() { '
+          kernel.string=PixelExperience Tissot Kernel
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          device.name1=tissot
+          device.name2=Mi A1
+          '; }
+
+          block=/dev/block/bootdevice/by-name/boot;
+          is_slot_device=auto;
+          ramdisk_compression=auto;
+
+          . tools/ak3-core.sh;
+
+          split_boot;
+          flash_boot;
+          EOF
+
+          zip -r9 ../PE-Tissot-Kernel-TWRP.zip . -x '*.git*'
           cd ..
+
+          ls -lh PE-Tissot-Kernel-TWRP.zip
 
       - name: Upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kernel
+          name: PE-Tissot-Kernel
           path: |
-            kernel.zip
+            PE-Tissot-Kernel-TWRP.zip
             kernel-output
             build.log
