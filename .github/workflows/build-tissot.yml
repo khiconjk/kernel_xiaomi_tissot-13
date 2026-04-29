@@ -54,8 +54,9 @@ jobs:
 
           export PATH="$GITHUB_WORKSPACE/clang/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:/usr/bin:$PATH"
 
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
 
           echo "===== DEFCONFIG ====="
           make O=out msm8953-perf_defconfig
@@ -68,10 +69,13 @@ jobs:
 
           echo "===== BUILD ====="
           make -j2 O=out \
-            LLVM=1 \
-            LLVM_IAS=1 \
+            CC=clang \
+            CLANG_TRIPLE=$CLANG_TRIPLE \
             CROSS_COMPILE=$CROSS_COMPILE \
             CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
+            HOSTCC=gcc \
+            HOSTCXX=g++ \
+            HOSTAR=ar \
             KCFLAGS="-Wno-error" \
             Image.gz 2>&1 | tee build.log
 
@@ -80,8 +84,6 @@ jobs:
 
           cp out/arch/arm64/boot/Image.gz kernel-output
 
-
-
       - name: Show real errors
         if: always()
         run: |
@@ -89,8 +91,6 @@ jobs:
           grep -i -n "error:\|fatal error:\|undefined reference\|No such file\|ld.lld:\|FAILED" build.log | head -100 || true
           echo "===== LAST 200 LINES ====="
           tail -200 build.log || true
-
-
 
       - name: Pack AnyKernel3
         run: |
