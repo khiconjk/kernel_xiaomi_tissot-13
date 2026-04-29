@@ -1,4 +1,4 @@
-name: Build PE Tissot Kernel Full Driver
+name: Build PE Tissot Kernel Full Driver TWRP
 
 on:
   workflow_dispatch:
@@ -30,18 +30,39 @@ jobs:
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
-      - name: Patch broken CAF source
+      - name: Patch source
         run: |
           set -e
+
+          echo "===== CLEAN OLD BAD STUB IF EXISTS ====="
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("techpack/audio/dsp/avtimer.c")
+          if p.exists():
+              s = p.read_text(errors="ignore")
+              bad = '''
+          /*
+           * Build fallback for CAF mismatch.
+           * If camera ISP provides a real implementation, the weak symbol is ignored.
+           */
+          __attribute__((weak)) void msm_isp_set_avtimer_fptr(void *fptr)
+          {
+          }
+          '''
+              s = s.replace(bad, "")
+              s = s.replace('__attribute__((weak)) void msm_isp_set_avtimer_fptr(void *fptr)\n{\n}\n', "")
+              s = s.replace('__attribute__((weak)) void msm_isp_set_avtimer_fptr(void *fptr)\r\n{\r\n}\r\n', "")
+              p.write_text(s)
+          PY
 
           echo "===== PATCH isp_proc missing fields ====="
           python3 <<'PY'
           from pathlib import Path
 
-          files = list(Path(".").rglob("*.[ch]"))
           patched = False
 
-          for p in files:
+          for p in Path(".").rglob("*.[ch]"):
               if ".git" in p.parts or "out" in p.parts:
                   continue
 
@@ -50,8 +71,7 @@ jobs:
               except Exception:
                   continue
 
-              key = "struct isp_proc"
-              idx = s.find(key)
+              idx = s.find("struct isp_proc")
               if idx == -1:
                   continue
 
@@ -76,18 +96,14 @@ jobs:
 
               body = s[brace:end]
 
-              if "dual_cam_drop" in body and "dual_cam_drop_detected" in body:
-                  print(f"Already patched: {p}")
-                  patched = True
-                  break
+              if "dual_cam_drop" not in body:
+                  s = s[:end-1] + "\n\tint dual_cam_drop;\n" + s[end-1:]
+                  end += len("\n\tint dual_cam_drop;\n")
 
-              insert = """
-                  int dual_cam_drop;
-                  int dual_cam_drop_detected;
-          """
+              if "dual_cam_drop_detected" not in s[brace:end + 80]:
+                  s = s[:end-1] + "\tint dual_cam_drop_detected;\n" + s[end-1:]
 
-              ns = s[:end-1] + insert + s[end-1:]
-              p.write_text(ns)
+              p.write_text(s)
               print(f"Patched struct isp_proc in: {p}")
               patched = True
               break
@@ -96,19 +112,35 @@ jobs:
               raise SystemExit("ERROR: struct isp_proc not found")
           PY
 
-          echo "===== PATCH optional weak avtimer hook ====="
-          if ! grep -R "msm_isp_set_avtimer_fptr.*{" drivers/media techpack 2>/dev/null | grep -v "grep" ; then
-            cat >> techpack/audio/dsp/avtimer.c <<'EOF'
+          echo "===== PATCH avtimer weak extern safely ====="
+          python3 <<'PY'
+          from pathlib import Path
+          import re
 
-          /*
-           * Build fallback for CAF mismatch.
-           * If camera ISP provides a real implementation, the weak symbol is ignored.
-           */
-          __attribute__((weak)) void msm_isp_set_avtimer_fptr(void *fptr)
-          {
-          }
-          EOF
-          fi
+          p = Path("techpack/audio/dsp/avtimer.c")
+          if not p.exists():
+              raise SystemExit("ERROR: techpack/audio/dsp/avtimer.c not found")
+
+          s = p.read_text(errors="ignore")
+
+          s = re.sub(
+              r'\n\s*__attribute__\s*\(\(weak\)\)\s*void\s+msm_isp_set_avtimer_fptr\s*\([^)]*\)\s*\{\s*\}\s*\n',
+              '\n',
+              s,
+              flags=re.S
+          )
+
+          if "__attribute__((weak))" not in s[:2000] or "msm_isp_set_avtimer_fptr" not in s[:2000]:
+              s = 'extern void msm_isp_set_avtimer_fptr(void *fptr) __attribute__((weak));\n' + s
+
+          s = re.sub(
+              r'(?<!if \()(?<!if\()\bmsm_isp_set_avtimer_fptr\s*\(([^;]+?)\);',
+              r'if (msm_isp_set_avtimer_fptr) msm_isp_set_avtimer_fptr(\1);',
+              s
+          )
+
+          p.write_text(s)
+          PY
 
           echo "===== CLEAN FLAGS ====="
           find . \
@@ -120,7 +152,7 @@ jobs:
               -e 's/-Werror//g' \
               -e 's/-implicit-function-declaration/-Wimplicit-function-declaration/g'
 
-      - name: Build kernel full driver
+      - name: Build kernel
         run: |
           set -e
 
