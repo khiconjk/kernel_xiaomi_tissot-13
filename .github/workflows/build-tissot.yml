@@ -34,58 +34,46 @@ jobs:
         run: |
           set -e
 
-          echo "===== PATCH CAMERA DUAL CAM FIELDS ====="
+          echo "===== PATCH CAMERA DUAL CAM LINES ====="
           python3 <<'PY'
           from pathlib import Path
-          import re
 
           p = Path("drivers/media/platform/msm/camera_v2/isp/msm_isp_axi_util.c")
-          if not p.exists():
-              raise SystemExit("ERROR: msm_isp_axi_util.c not found")
-
           s = p.read_text(errors="ignore")
 
-          s = re.sub(
-              r'\n\s*vfe_dev->isp_page->dual_cam_drop\s*=\s*[^;]+;',
-              '\n\t/* CAF mismatch fix: dual_cam_drop field not present */',
-              s,
-              flags=re.S
+          s = s.replace(
+              "vfe_dev->isp_page->dual_cam_drop =",
+              "/* CAF mismatch: vfe_dev->isp_page->dual_cam_drop = */"
           )
 
-          s = re.sub(
-              r'\n\s*vfe_dev->isp_page->dual_cam_drop_detected\s*=\s*[^;]+;',
-              '\n\t/* CAF mismatch fix: dual_cam_drop_detected field not present */',
-              s,
-              flags=re.S
+          s = s.replace(
+              "vfe_dev->isp_page->dual_cam_drop_detected = 1;",
+              "/* CAF mismatch: vfe_dev->isp_page->dual_cam_drop_detected = 1; */"
           )
 
           p.write_text(s)
-          print("patched:", p)
+          print("patched msm_isp_axi_util.c")
           PY
 
-          echo "===== PATCH AVTIMER WEAK FALLBACK ====="
+          echo "===== PATCH AVTIMER CLEAN ====="
           python3 <<'PY'
           from pathlib import Path
 
           p = Path("techpack/audio/dsp/avtimer.c")
-          if not p.exists():
-              raise SystemExit("ERROR: avtimer.c not found")
-
           s = p.read_text(errors="ignore")
 
-          if "msm_isp_set_avtimer_fptr_weak_fallback_marker" not in s:
-              patch = r'''
+          s = s.replace(
+              "__attribute__((weak)) void msm_isp_set_avtimer_fptr(void *fptr)\n{\n}\n",
+              ""
+          )
 
-          /* msm_isp_set_avtimer_fptr_weak_fallback_marker */
-          void __attribute__((weak)) msm_isp_set_avtimer_fptr(struct avtimer_fptr_t avtimer_fptr)
-          {
-          }
-          '''
-              s += patch
-              p.write_text(s)
-              print("patched:", p)
-          else:
-              print("avtimer already patched")
+          s = s.replace(
+              "extern void msm_isp_set_avtimer_fptr(void *fptr) __attribute__((weak));\n",
+              ""
+          )
+
+          p.write_text(s)
+          print("cleaned avtimer.c")
           PY
 
           echo "===== REMOVE WERROR ====="
