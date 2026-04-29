@@ -1,4 +1,4 @@
-name: Build PE Tissot Kernel FINAL CLEAN
+name: Build PE Tissot Kernel Full Driver TWRP
 
 on:
   workflow_dispatch:
@@ -30,54 +30,65 @@ jobs:
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
-      - name: Patch kernel correctly
+      - name: Patch kernel source
         run: |
           set -e
 
-          echo "===== PATCH isp_proc SAFE ====="
+          echo "===== PATCH CAMERA DUAL CAM FIELDS ====="
+          python3 <<'PY'
+          from pathlib import Path
+          import re
 
+          p = Path("drivers/media/platform/msm/camera_v2/isp/msm_isp_axi_util.c")
+          if not p.exists():
+              raise SystemExit("ERROR: msm_isp_axi_util.c not found")
+
+          s = p.read_text(errors="ignore")
+
+          s = re.sub(
+              r'\n\s*vfe_dev->isp_page->dual_cam_drop\s*=\s*[^;]+;',
+              '\n\t/* CAF mismatch fix: dual_cam_drop field not present */',
+              s,
+              flags=re.S
+          )
+
+          s = re.sub(
+              r'\n\s*vfe_dev->isp_page->dual_cam_drop_detected\s*=\s*[^;]+;',
+              '\n\t/* CAF mismatch fix: dual_cam_drop_detected field not present */',
+              s,
+              flags=re.S
+          )
+
+          p.write_text(s)
+          print("patched:", p)
+          PY
+
+          echo "===== PATCH AVTIMER WEAK FALLBACK ====="
           python3 <<'PY'
           from pathlib import Path
 
-          p = Path("include/media/msmb_isp.h")
-          s = p.read_text()
+          p = Path("techpack/audio/dsp/avtimer.c")
+          if not p.exists():
+              raise SystemExit("ERROR: avtimer.c not found")
 
-          start = s.find("struct isp_proc")
-          if start == -1:
-              raise SystemExit("isp_proc not found")
+          s = p.read_text(errors="ignore")
 
-          brace = s.find("{", start)
-          end = brace + 1
-          depth = 1
+          if "msm_isp_set_avtimer_fptr_weak_fallback_marker" not in s:
+              patch = r'''
 
-          while end < len(s) and depth:
-              if s[end] == "{":
-                  depth += 1
-              elif s[end] == "}":
-                  depth -= 1
-              end += 1
-
-          block = s[brace:end]
-
-          if "dual_cam_drop" not in block:
-              new_block = block[:-1] + "\n\tint dual_cam_drop;\n\tint dual_cam_drop_detected;\n}"
-              s = s[:brace] + new_block + s[end:]
+          /* msm_isp_set_avtimer_fptr_weak_fallback_marker */
+          void __attribute__((weak)) msm_isp_set_avtimer_fptr(struct avtimer_fptr_t avtimer_fptr)
+          {
+          }
+          '''
+              s += patch
               p.write_text(s)
-              print("isp_proc patched correctly")
+              print("patched:", p)
           else:
-              print("isp_proc already patched")
+              print("avtimer already patched")
           PY
 
-          echo "===== FIX avtimer NO CONFLICT ====="
-
-          sed -i '/msm_isp_set_avtimer_fptr/d' techpack/audio/dsp/avtimer.c
-
-          if ! grep -q '#include <media/msmb_isp.h>' techpack/audio/dsp/avtimer.c; then
-            sed -i '1i #include <media/msmb_isp.h>' techpack/audio/dsp/avtimer.c
-          fi
-
           echo "===== REMOVE WERROR ====="
-
           find . \
             -path "./.git" -prune -o \
             -path "./out" -prune -o \
@@ -117,9 +128,6 @@ jobs:
           sed -i "s/^CONFIG_CC_STACKPROTECTOR=y/# CONFIG_CC_STACKPROTECTOR is not set/g" out/.config || true
           sed -i "s/^CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g" out/.config || true
 
-          echo "===== VERIFY CONFIG ====="
-          grep -n "CC_STACKPROTECTOR\|WERROR" out/.config || true
-
           echo "===== BUILD ====="
           make -j2 O=out \
             ARCH=arm64 \
@@ -139,8 +147,6 @@ jobs:
             echo "ERROR: No kernel image found"
             exit 1
           fi
-
-          ls -lh kernel-output
 
       - name: Show real errors
         if: always()
@@ -182,8 +188,6 @@ jobs:
 
           zip -r9 ../PE-Tissot-Kernel-FullDriver-TWRP.zip . -x "*.git*"
           cd ..
-
-          ls -lh PE-Tissot-Kernel-FullDriver-TWRP.zip
 
       - name: Upload
         if: always()
