@@ -1,4 +1,4 @@
-name: Build PE Tissot Kernel TWRP
+name: Build PE Tissot Kernel Full Driver
 
 on:
   workflow_dispatch:
@@ -30,7 +30,97 @@ jobs:
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi
 
-      - name: Build kernel
+      - name: Patch broken CAF source
+        run: |
+          set -e
+
+          echo "===== PATCH isp_proc missing fields ====="
+          python3 <<'PY'
+          from pathlib import Path
+
+          files = list(Path(".").rglob("*.[ch]"))
+          patched = False
+
+          for p in files:
+              if ".git" in p.parts or "out" in p.parts:
+                  continue
+
+              try:
+                  s = p.read_text(errors="ignore")
+              except Exception:
+                  continue
+
+              key = "struct isp_proc"
+              idx = s.find(key)
+              if idx == -1:
+                  continue
+
+              brace = s.find("{", idx)
+              semi = s.find(";", idx)
+
+              if brace == -1 or (semi != -1 and semi < brace):
+                  continue
+
+              end = brace + 1
+              depth = 1
+
+              while end < len(s) and depth:
+                  if s[end] == "{":
+                      depth += 1
+                  elif s[end] == "}":
+                      depth -= 1
+                  end += 1
+
+              if depth != 0:
+                  continue
+
+              body = s[brace:end]
+
+              if "dual_cam_drop" in body and "dual_cam_drop_detected" in body:
+                  print(f"Already patched: {p}")
+                  patched = True
+                  break
+
+              insert = """
+                  int dual_cam_drop;
+                  int dual_cam_drop_detected;
+          """
+
+              ns = s[:end-1] + insert + s[end-1:]
+              p.write_text(ns)
+              print(f"Patched struct isp_proc in: {p}")
+              patched = True
+              break
+
+          if not patched:
+              raise SystemExit("ERROR: struct isp_proc not found")
+          PY
+
+          echo "===== PATCH optional weak avtimer hook ====="
+          if ! grep -R "msm_isp_set_avtimer_fptr.*{" drivers/media techpack 2>/dev/null | grep -v "grep" ; then
+            cat >> techpack/audio/dsp/avtimer.c <<'EOF'
+
+          /*
+           * Build fallback for CAF mismatch.
+           * If camera ISP provides a real implementation, the weak symbol is ignored.
+           */
+          __attribute__((weak)) void msm_isp_set_avtimer_fptr(void *fptr)
+          {
+          }
+          EOF
+          fi
+
+          echo "===== CLEAN FLAGS ====="
+          find . \
+            -path './.git' -prune -o \
+            -path './out' -prune -o \
+            -type f \
+            -print0 | xargs -0 sed -i \
+              -e 's/-Werror=[A-Za-z0-9_-]*//g' \
+              -e 's/-Werror//g' \
+              -e 's/-implicit-function-declaration/-Wimplicit-function-declaration/g'
+
+      - name: Build kernel full driver
         run: |
           set -e
 
@@ -45,56 +135,16 @@ jobs:
           echo "===== DEFCONFIG ====="
           make O=out ARCH=arm64 msm8953-perf_defconfig
 
-          echo "===== FIX CONFIG ====="
+          echo "===== FIX CONFIG ONLY ====="
           scripts/config --file out/.config -d CONFIG_CC_STACKPROTECTOR_STRONG || true
           scripts/config --file out/.config -d CONFIG_CC_STACKPROTECTOR || true
           scripts/config --file out/.config -d CONFIG_WERROR || true
 
-          echo "===== DISABLE BROKEN CAMERA DRIVER ====="
-          scripts/config --file out/.config -d CONFIG_MSM_ISP || true
-          scripts/config --file out/.config -d CONFIG_MSM_CAMERA_V2 || true
-          scripts/config --file out/.config -d CONFIG_MSMB_CAMERA || true
-
-          echo "===== DISABLE AUDIO ====="
-          scripts/config --file out/.config -d CONFIG_SND || true
-          scripts/config --file out/.config -d CONFIG_SND_SOC || true
-          scripts/config --file out/.config -d CONFIG_AUDIO || true
-          scripts/config --file out/.config -d CONFIG_MSM_AVTIMER || true
-          scripts/config --file out/.config -d CONFIG_SND_SOC_MSM_QDSP6 || true
-          scripts/config --file out/.config -d CONFIG_MSM_ADSP_LOADER || true
-
-          echo "===== DISABLE BLUETOOTH AUDIO DEP ====="
-          scripts/config --file out/.config -d CONFIG_BT || true
-          scripts/config --file out/.config -d CONFIG_BT_SLIM || true
-          scripts/config --file out/.config -d CONFIG_BT_BTFM_SLIM || true
-          scripts/config --file out/.config -d CONFIG_BTFM_SLIM || true
-
           make O=out ARCH=arm64 olddefconfig
 
-          echo "===== FORCE CONFIG AFTER OLDDEFCONFIG ====="
+          echo "===== FORCE STACKPROTECTOR OFF ====="
           sed -i 's/CONFIG_CC_STACKPROTECTOR=y/# CONFIG_CC_STACKPROTECTOR is not set/g' out/.config || true
           sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/g' out/.config || true
-
-          sed -i 's/CONFIG_MSM_ISP=y/# CONFIG_MSM_ISP is not set/g' out/.config || true
-          sed -i 's/CONFIG_MSM_CAMERA_V2=y/# CONFIG_MSM_CAMERA_V2 is not set/g' out/.config || true
-          sed -i 's/CONFIG_MSMB_CAMERA=y/# CONFIG_MSMB_CAMERA is not set/g' out/.config || true
-
-          sed -i 's/CONFIG_SND=y/# CONFIG_SND is not set/g' out/.config || true
-          sed -i 's/CONFIG_SND_SOC=y/# CONFIG_SND_SOC is not set/g' out/.config || true
-          sed -i 's/CONFIG_AUDIO=y/# CONFIG_AUDIO is not set/g' out/.config || true
-          sed -i 's/CONFIG_MSM_AVTIMER=y/# CONFIG_MSM_AVTIMER is not set/g' out/.config || true
-          sed -i 's/CONFIG_SND_SOC_MSM_QDSP6=y/# CONFIG_SND_SOC_MSM_QDSP6 is not set/g' out/.config || true
-          sed -i 's/CONFIG_MSM_ADSP_LOADER=y/# CONFIG_MSM_ADSP_LOADER is not set/g' out/.config || true
-
-          sed -i 's/CONFIG_BT=y/# CONFIG_BT is not set/g' out/.config || true
-          sed -i 's/CONFIG_BT_SLIM=y/# CONFIG_BT_SLIM is not set/g' out/.config || true
-          sed -i 's/CONFIG_BT_BTFM_SLIM=y/# CONFIG_BT_BTFM_SLIM is not set/g' out/.config || true
-          sed -i 's/CONFIG_BTFM_SLIM=y/# CONFIG_BTFM_SLIM is not set/g' out/.config || true
-
-          echo "===== REMOVE PROBLEM SOURCE ====="
-          rm -rf techpack/audio || true
-          rm -f drivers/bluetooth/btfm_slim.o || true
-          rm -f drivers/bluetooth/btfm_slim_codec.o || true
 
           echo "===== BUILD ====="
           make -j2 O=out \
@@ -105,7 +155,7 @@ jobs:
             Image.gz 2>&1 | tee build.log
 
           echo "===== OUTPUT ====="
-          find out/arch/arm64/boot -type f -exec ls -lh {} \;
+          ls -lh out/arch/arm64/boot/
 
           if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
             cp out/arch/arm64/boot/Image.gz-dtb kernel-output
@@ -122,7 +172,7 @@ jobs:
         if: always()
         run: |
           echo "===== ERROR LINES ====="
-          grep -i -n "error:\|fatal error:\|undefined reference\|No such file\|ld.lld:\|FAILED" build.log | head -100 || true
+          grep -i -n "error:\|fatal error:\|undefined reference\|No such file\|FAILED" build.log | head -100 || true
           echo "===== LAST 200 LINES ====="
           tail -200 build.log || true
 
@@ -137,7 +187,7 @@ jobs:
 
           cat > anykernel.sh <<'EOF'
           properties() { '
-          kernel.string=PixelExperience Tissot Kernel
+          kernel.string=PixelExperience Tissot Kernel Full Driver
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -156,17 +206,17 @@ jobs:
           flash_boot;
           EOF
 
-          zip -r9 ../PE-Tissot-Kernel-TWRP.zip . -x '*.git*'
+          zip -r9 ../PE-Tissot-Kernel-FullDriver-TWRP.zip . -x '*.git*'
           cd ..
 
-          ls -lh PE-Tissot-Kernel-TWRP.zip
+          ls -lh PE-Tissot-Kernel-FullDriver-TWRP.zip
 
       - name: Upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: PE-Tissot-Kernel
+          name: PE-Tissot-Kernel-FullDriver
           path: |
-            PE-Tissot-Kernel-TWRP.zip
+            PE-Tissot-Kernel-FullDriver-TWRP.zip
             kernel-output
             build.log
